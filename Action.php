@@ -7,37 +7,33 @@
  * @license    GNU General Public License 2.0
  *
  */
-
 class CommentToMail_Action extends Typecho_Widget implements Widget_Interface_Do
 {
-
     private $_db;
     private $_dir;
-    private $_set;
-    public  $mail;
-    public  $smtp;
-
-    public function  __construct($request, $response, $params = NULL) {
-        parent::__construct($request, $response, $params);
-        $this->_db = Typecho_Db::get();
-        $this->_dir ='.'. __TYPECHO_PLUGIN_DIR__.'/CommentToMail/';
-        $this->_set = Helper::options()->plugin('CommentToMail');
-
-        require_once ($this->_dir.'class.phpmailer.php');
-        $this->mail = new PHPMailer();
-        $this->mail->CharSet = 'UTF-8';
-        $this->mail->Encoding = 'base64';
-    }
+    private $_cfg;
+    private $_isMailLog = false;
+    public  $mailer;
+    public  $email;
 
     /**
      * 读取缓存文件内容，并根据条件组合邮件内容发送。
      */
-    public function send($cacheFile){
-        $file = $this->_dir.'cache/'.$cacheFile;
-        if(file_exists($file)){
-            $this->smtp = unserialize(file_get_contents($this->_dir.'cache/'.$cacheFile));
-            if(!$this->widget('Widget_User')->simpleLogin($this->smtp->ownerId)){
-                @unlink($file);
+    public function process($fileName)
+    {
+        /** 载入邮件组件 */
+        require_once $this->_dir . '/lib/class.phpmailer.php';
+
+        $this->mailer = new PHPMailer();
+        $this->mailer->CharSet = 'UTF-8';
+        $this->mailer->Encoding = 'base64';
+
+        //获取评论内容
+        $file = $this->_dir . '/cache/' . $fileName;
+        if (file_exists($file)) {
+            $this->email = unserialize(file_get_contents($file));
+            @unlink($file);
+            if (!$this->widget('Widget_User')->simpleLogin($this->email->ownerId)) {
                 $this->widget('Widget_Archive@404', 'type=404')->render();
                 exit;
             }
@@ -46,188 +42,267 @@ class CommentToMail_Action extends Typecho_Widget implements Widget_Interface_Do
             exit;
         }
         
-
         //如果本次评论设置了拒收邮件，把coid加入拒收列表
-        if($this->smtp->banMail){
-            $this->proveParent($this->smtp->coid,1);
+        if ($this->email->banMail) {
+            $this->proveParent($this->email->coid, 1);
         }
 
         //选择发信模式
-        switch ($this->_set->mode)
+        switch ($this->_cfg->mode)
         {
             case 'mail':
                 break;
             case 'sendmail':
-                $this->mail->IsSendmail();
+                $this->mailer->IsSendmail();
                 break;
             case 'smtp':
-                $this->mail->IsSMTP();
-                if(in_array('validate',$this->_set->validate)) $this->mail->SMTPAuth   = true;
-                if(in_array('ssl',$this->_set->validate))      $this->mail->SMTPSecure = "ssl";
-                $this->mail->Host       = $this->_set->host;
-                $this->mail->Port       = $this->_set->port;
-                $this->mail->Username   = $this->_set->user;
-                $this->mail->Password   = $this->_set->pass;
-                $this->smtp->from       = $this->_set->user;
+                $this->mailer->IsSMTP();
+                
+                if (in_array('validate', $this->_cfg->validate)) {
+                    $this->mailer->SMTPAuth = true;
+                }
+                
+                if (in_array('ssl', $this->_cfg->validate)) {
+                    $this->mailer->SMTPSecure = "ssl";
+                }
+                
+                $this->mailer->Host     = $this->_cfg->host;
+                $this->mailer->Port     = $this->_cfg->port;
+                $this->mailer->Username = $this->_cfg->user;
+                $this->mailer->Password = $this->_cfg->pass;
+                $this->email->from      = $this->_cfg->user;
                 break;
         }
-       
-        if(in_array('to_log',$this->_set->other)) $this->smtp->mailLog = true;
 
         //向博主发邮件的标题格式
-        $this->smtp->titleForOwner = $this->_set->titleForOwner;
+        $this->email->titleForOwner = $this->_cfg->titleForOwner;
         
         //向访客发邮件的标题格式
-        $this->smtp->titleForGuest = $this->_set->titleForGuest;
+        $this->email->titleForGuest = $this->_cfg->titleForGuest;
 
         //验证博主是否接收自己的邮件
-        $toMe = (in_array('to_me', $this->_set->other) && $this->smtp->ownerId == $this->smtp->authorId) ? true : false;
-        
-        
+        $toMe = (in_array('to_me', $this->_cfg->other) && $this->email->ownerId == $this->email->authorId) ? true : false;
+
         //向博主发信
-        if( in_array($this->smtp->status, $this->_set->status) && in_array('to_owner', $this->_set->other) && ( $toMe || $this->smtp->ownerId != $this->smtp->authorId) && 0 == $this->smtp->parent ){
-            if(empty($this->_set->mail)){
-            	Typecho_Widget::widget('Widget_Users_Author@' . $this->smtp->cid, array('uid' => $this->smtp->ownerId))->to($user);
-            	$this->smtp->to = $user->mail;
-            }else{
-                $this->smtp->to = $this->_set->mail;
+        if (in_array($this->email->status, $this->_cfg->status) && in_array('to_owner', $this->_cfg->other)
+            && ( $toMe || $this->email->ownerId != $this->email->authorId) && 0 == $this->email->parent ) {
+            if (empty($this->_cfg->mail)) {
+                Typecho_Widget::widget('Widget_Users_Author@temp' . $this->email->cid, array('uid' => $this->email->ownerId))->to($user);
+            	$this->email->to = $user->mail;
+            } else {
+                $this->email->to = $this->_cfg->mail;
             }
 
-            $this->sendMail(0);
+            $this->sendMail('owner');
         }
 
         //向访客发信
-        if(0 != $this->smtp->parent && 'approved' == $this->smtp->status && in_array('to_guest', $this->_set->other) && $this->proveParent($this->smtp->parent)){
-           
-            $original = $this->_db->fetchRow($this->_db->select('author', 'mail', 'text')
-                    ->from('table.comments')
-                    ->where('coid = ?', $this->smtp->parent));
-
-            $toGuest = (!in_array('to_me', $this->_set->other) && $this->smtp->mail == $original['mail'] || $this->smtp->to == $original['mail']) ? false: true;
+        if (0 != $this->email->parent 
+            && 'approved' == $this->email->status 
+            && in_array('to_guest', $this->_cfg->other)
+            && $this->proveParent($this->email->parent)) {
             
-            if($toGuest){           
-                $this->smtp->to = $original['mail'];
-                $this->smtp->originalText = $original['text'];
-                $this->smtp->originalAuthor = $original['author'];
-                $this->sendMail(1);
-            } 
+            //如果联系我的邮件地址为空，则使用文章作者的邮件地址
+            if (empty($this->email->contactme)) {
+                if (!isset($user) || !$user) {
+                    Typecho_Widget::widget('Widget_Users_Author@temp' . $this->email->cid, array('uid' => $this->email->ownerId))->to($user);
+                }
+                $this->email->contactme = $user->mail;
+            } else {
+                $this->email->contactme = $this->_cfg->contactme;
+            }
+
+            $original = $this->_db->fetchRow($this->_db->select('author', 'mail', 'text')
+                                                       ->from('table.comments')
+                                                       ->where('coid = ?', $this->email->parent));
+
+            if (in_array('to_me', $this->_cfg->other) 
+                || $this->email->mail != $original['mail']) {
+                $this->email->to             = $original['mail'];
+                $this->email->originalText   = $original['text'];
+                $this->email->originalAuthor = $original['author'];
+                $this->sendMail('guest');
+            }
         }
 
-        @unlink($file);
-
+        $this->mailLog(false, "邮件发送完毕！\n");
     }
     
     /*
      * 生成邮件内容并发送
-     * $sendto 为  0 发向博主;  1 发向访客
+     * $sendTo 为  owner 发向博主;  其它发向访客
      */
-    public function sendMail($sendto = 0){
-    	$date = new Typecho_Date($this->smtp->created);
+    public function sendMail($author = 'owner')
+    {
+    	$date = new Typecho_Date($this->email->created);
         $time = date('Y-m-d H:i:s', $date->timeStamp);
 
-        if(!$sendto){
+        if ('owner' == $author) {
             $status = array(
                 "approved" => '通过',
                 "waiting"  => '待审',
                 "spam"     => '垃圾'
             );
-            $subject = $this->_set->titleForOwner;
-            $body =  $this->getTemplet();
-            $search = array('{site}','{title}','{author}','{ip}','{mail}','{permalink}','{manage}','{text}','{time}','{status}');
-            $replace = array($this->smtp->site,$this->smtp->title,$this->smtp->author,$this->smtp->ip,$this->smtp->mail,$this->smtp->permalink,$this->smtp->manage,$this->smtp->text,$time,$status[$this->smtp->status]);
-        }  else {
-            $subject = $this->_set->titleForGuest;
-            $body = $this->getTemplet(1);
-            $search = array('{site}','{title}','{author_p}','{author}','{mail}','{permalink}','{text}','{text_p}','{time}');
-            $replace = array($this->smtp->site,$this->smtp->title,$this->smtp->originalAuthor,$this->smtp->author, $this->smtp->mail,$this->smtp->permalink,$this->smtp->text,$this->smtp->originalText,$time);
+            $subject = $this->_cfg->titleForOwner;
+            $body =  $this->getTemplate();
+            $search = array(
+                '{site}',
+                '{title}',
+                '{author}',
+                '{ip}',
+                '{mail}',
+                '{permalink}',
+                '{manage}',
+                '{text}',
+                '{time}',
+                '{status}'
+            );
+            $replace = array(
+                $this->email->site,
+                $this->email->title,
+                $this->email->author,
+                $this->email->ip,
+                $this->email->mail,
+                $this->email->permalink,
+                $this->email->manage,
+                $this->email->text,
+                $time,
+                $status[$this->email->status]
+            );
+        } else {
+            $subject = $this->_cfg->titleForGuest;
+            $body    = $this->getTemplate('guest');
+            $search  = array(
+                '{site}',
+                '{title}',
+                '{author_p}',
+                '{author}',
+                '{mail}',
+                '{permalink}',
+                '{text}',
+                '{contactme}',
+                '{text_p}',
+                '{time}'
+            );
+            $replace = array(
+                $this->email->site,
+                $this->email->title,
+                $this->email->originalAuthor,
+                $this->email->author,
+                $this->email->mail,
+                $this->email->permalink,
+                $this->email->text,
+                $this->email->contactme,
+                $this->email->originalText,
+                $time
+            );
         }
 
-        $this->smtp->body = str_replace($search, $replace, $body);
-        $this->smtp->subject = str_replace($search, $replace, $subject);
-        $this->smtp->AltBody = "作者：".$this->smtp->author."\r\n链接：".$this->smtp->permalink."\r\n评论：\r\n".$this->smtp->text;
-        
-        $this->mail->SetFrom($this->smtp->from, $this->smtp->site);
-        $this->mail->AddReplyTo($this->smtp->to, $this->smtp->site);
-        $this->mail->Subject = $this->smtp->subject;
-        $this->mail->AltBody = $this->smtp->AltBody;
-        $this->mail->MsgHTML($this->smtp->body);
+        $this->email->body = str_replace($search, $replace, $body);
+        $this->email->subject = str_replace($search, $replace, $subject);
+        $this->email->AltBody = "作者：".$this->email->author."\r\n链接：".$this->email->permalink."\r\n评论：\r\n".$this->email->text;
 
-        $name = $this->smtp->originalAuthor ? $this->smtp->originalAuthor : $this->smtp->site;
+        $this->mailer->SetFrom($this->email->from, $this->email->site);
+        $this->mailer->AddReplyTo($this->email->to, $this->email->site);
+        $this->mailer->Subject = $this->email->subject;
+        $this->mailer->AltBody = $this->email->AltBody;
+        $this->mailer->MsgHTML($this->email->body);
 
-        $this->mail->AddAddress($this->smtp->to,$name);
-        
-        if($this->mail->Send()){
-            if(in_array('to_log', $this->_set->other)) $this->mailLog();
-        }else{
-            $this->mailLog(0);
+        $name = $this->email->originalAuthor ? $this->email->originalAuthor : $this->email->site;
+
+        $this->mailer->AddAddress($this->email->to,$name);
+
+        if ($this->mailer->Send()) {
+            $this->mailLog();
+        } else {
+            $this->mailLog(false);
         }
-        $this->mail->ClearAddresses();
-        $this->mail->ClearReplyTos();
-
+        
+        $this->mailer->ClearAddresses();
+        $this->mailer->ClearReplyTos();
     }
-
 
     /*
      * 记录邮件发送日志和错误信息
      */
-    public function mailLog($type = 1){
-        if($type){
-            //file_put_contents($this->_dir.'log/log.txt', $msg);
-            $msg = $msg ? $msg : date("Y-m-d H:i:s",$this->smtp->created+$this->smtp->timezone)." 向 ".  $this->smtp->to." 发送邮件成功！\r\n";
-            $file = $this->_dir.'/log/mail_log.txt';
-            $fp = @fopen($file,'a+');
-            fwrite($fp,$msg);
-            fclose($fp);
-        }  else {
-            file_put_contents($this->_dir.'log/error_log.txt', $this->mail->ErrorInfo);
+    public function mailLog($type = true, $content = null)
+    {
+        if (!$this->_isMailLog) {
+            return false;
         }
+
+        $fileName = $this->_dir . '/log/mailer_log.txt';
+        if ($type) {
+            $content  = $content ? $content : date("Y-m-d H:i:s",
+                            $this->email->created + $this->email->timezone) . " 向 " . $this->email->to . " 发送邮件成功！\r\n";
+        } else {
+            $content  = $content ? $content : $this->mailer->ErrorInfo;
+        }
+
+        file_put_contents($fileName, $content, FILE_APPEND);
     }
+
     /*
      * 获取邮件正文模板
-     * $og 0为博主 1为访客
+     * $author owner为博主 guest为访客
      */
-    public function getTemplet($og = 0){
-        if(!$og){
-            $templet = file_get_contents($this->_dir.'owner.html');
-        }else{
-            $templet = file_get_contents($this->_dir.'guest.html');
-        }
-        return $templet;
+    public function getTemplate($author = 'owner')
+    {
+        $template = 'owner' == $author ? 'owner' : 'guest';
+
+        return file_get_contents($this->_dir . '/' . $template . '.html');
     }
+
     /*
      * 验证原评论者是否接收评论
      */
-    public function proveParent($parent, $write = false){
-        if($parent){
-            $index = ceil($parent/500);
-            $filename = $this->_dir.'log/ban_'.$index.'.list';
+    public function proveParent($parent, $write = false)
+    {
+        if ($parent) {
+            $index    = ceil($parent / 500);
+            $filename = $this->_dir . '/log/ban_' . $index . '.list';
 
-            if(!file_exists($filename)){
+            if (!file_exists($filename)) {
                 file_put_contents($filename, "a:0:{}");
             }
 
-            $list=unserialize(file_get_contents($filename));
+            $list = unserialize(file_get_contents($filename));
+
             //写入记录
-            if($write){
-                $list[$parent]=1;
-                file_put_contents($filename,serialize($list));
-                return true;
-            }
-            //判读记录是否存在，存在则返回false，不存在返回true表示接收邮件
-            if(!$write && 1 == $list[$parent]){
-                return false;
-            }else{
+            if ($write) {
+                $list[$parent] = 1;
+                file_put_contents($filename, serialize($list));
+
                 return true;
             }
 
+            //判读记录是否存在，存在则返回false，不存在返回true表示接收邮件
+            if (!$write && 1 == $list[$parent]) {
+                return false;
+            } else {
+                return true;
+            }
         } else {
             return false;
         }
     }
-    
-    public function action(){
-        $this->on($this->request->is('send'))->send($this->request->send);
+
+    /**
+     * 初始化函数
+     *
+     * @access public
+     * @return void
+     */
+    public function action()
+    {
+        $this->_db  = Typecho_Db::get();
+        $this->_dir = dirname(__FILE__);
+        $this->_cfg = Helper::options()->plugin('CommentToMail');
+
+        //是否记录邮件错误日志
+        $this->_isMailLog = in_array('to_log', $this->_cfg->other) ? true : false;
+        $this->mailLog(false, "开始发送邮件Action：" . $this->request->send . "\n");
+
+        $this->on($this->request->is('send'))->process($this->request->send);
     }
 }
-?>
-
