@@ -1,20 +1,29 @@
 <?php
 /**
- * 评论回复邮件提醒插件
+ * 评论邮件提醒插件
  *
  * @package CommentToMail
- * @author Byends Upgrade
- * @version 1.3.2
+ * @author Byends Upd.
+ * @version 2.0.0
  * @link http://www.byends.com
  * @oriAuthor DEFE (http://defe.me)
  * 
- * 原作者是  DEFE (http://defe.me),请尊重版权
- * 
+ * 原作者是 DEFE (http://defe.me),请尊重版权
+ *
  */
 class CommentToMail_Plugin implements Typecho_Plugin_Interface
 {
-    private static $_actionName = 'comment-to-mail';
+    /** @var string 提交路由前缀 */
+    public static $action = 'comment-to-mail';
+    
+    /** @var string 控制菜单链接 */
+    public static $panel  = 'CommentToMail/page/console.php';
+
+    /** @var bool 是否记录日志 */
     private static $_isMailLog  = false;
+    
+    /** @var bool 请求适配器 */
+    private static $_adapter    = false;
 
     /**
      * 激活插件方法,如果激活失败,直接抛出异常
@@ -25,14 +34,20 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
      */
     public static function activate()
     {
-        if (false == Typecho_Http_Client::get()) {
-            throw new Typecho_Plugin_Exception(_t('对不起, 您的主机不支持 php-curl 扩展而且没有打开 allow_url_fopen 功能, 无法正常使用此功能'));
+        if (false == self::isAvailable()) {
+            throw new Typecho_Plugin_Exception(_t('对不起, 您的主机没有打开 allow_url_fopen 功能而且不支持 php-curl 扩展, 无法正常使用此功能'));
+        }
+        
+        if (false == self::isWritable(dirname(__FILE__) . '/cache/')) {
+            throw new Typecho_Plugin_Exception(_t('对不起，插件目录不可写，无法正常使用此功能'));
         }
 
         Typecho_Plugin::factory('Widget_Feedback')->finishComment = array('CommentToMail_Plugin', 'parseComment');
-        Helper::addAction(self::$_actionName, 'CommentToMail_Action');
+        Typecho_Plugin::factory('Widget_Comments_Edit')->finishComment = array('CommentToMail_Plugin', 'parseComment');
+        Helper::addAction(self::$action, 'CommentToMail_Action');
+        Helper::addPanel(1, self::$panel, '评论邮件提醒', '评论邮件提醒控制台', 'administrator');
 
-        return _t('请对插件进行正确设置，以使插件顺利工作！');
+        return _t('请设置邮箱信息，以使插件正常使用！');
     }
 
     /**
@@ -45,7 +60,8 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
      */
     public static function deactivate()
     {
-        Helper::removeAction(self::$_actionName);
+        Helper::removeAction(self::$action);
+        Helper::removePanel(1, self::$panel);
     }
 
     /**
@@ -87,13 +103,17 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
                     'ssl'=>'ssl加密'),
                 array('validate'),'SMTP验证');
         $form->addInput($validate);
+        
+        $fromName = new Typecho_Widget_Helper_Form_Element_Text('fromName', NULL, NULL,
+                _t('发件人名称'),_t('发件人名称，留空则使用博客标题'));
+        $form->addInput($fromName);
 
         $mail = new Typecho_Widget_Helper_Form_Element_Text('mail', NULL, NULL,
                 _t('接收邮件的地址'),_t('接收邮件的地址,如为空则使用文章作者个人设置中的邮件地址！'));
         $form->addInput($mail->addRule('email', _t('请填写正确的邮件地址！')));
 
         $contactme = new Typecho_Widget_Helper_Form_Element_Text('contactme', NULL, NULL,
-                _t('联系我的邮件地址'),_t('联系我用的邮件地址,如为空则使用文章作者个人设置中的邮件地址！'));
+                _t('模板中“联系我”的邮件地址'),_t('联系我用的邮件地址,如为空则使用文章作者个人设置中的邮件地址！'));
         $form->addInput($contactme->addRule('email', _t('请填写正确的邮件地址！')));
 
         $status = new Typecho_Widget_Helper_Form_Element_Checkbox('status',
@@ -108,7 +128,7 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
                     'to_guest' => '评论被回复时，发邮件通知评论者。',
                     'to_me'=>'自己回复自己的评论时，发邮件通知。(同时针对博主和访客)',
                     'to_log' => '记录邮件发送日志。'),
-                array('to_owner','to_guest'), '其他设置',_t('如果选上"记录邮件发送日志"选项，则会在./CommentToMail/log/mailer_log.txt 文件中记录发送信息。'));
+                array('to_owner','to_guest'), '其他设置',_t('选中该选项插件会在log/mailer_log.txt 文件中记录发送日志。'));
         $form->addInput($other->multiMode());
 
         $titleForOwner = new Typecho_Widget_Helper_Form_Element_Text('titleForOwner',null,"[{title}] 一文有新的评论",
@@ -138,10 +158,10 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
      * @return void
      */
     public static function parseComment($comment)
-    {
+    {        
         $options           = Typecho_Widget::widget('Widget_Options');
         $cfg = array(
-            'site'      => $options->title,
+            'siteTitle' => $options->title,
             'timezone'  => $options->timezone,
             'cid'       => $comment->cid,
             'coid'      => $comment->coid,
@@ -172,40 +192,52 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
         $cfg      = (object)$cfg;
         file_put_contents(dirname(__FILE__) . '/cache/' . $fileName, serialize($cfg));
         $url = ($options->rewrite) ? $options->siteUrl : $options->siteUrl . 'index.php';
-        $url = rtrim($url, '/') . '/action/' . self::$_actionName . '?send=' . $fileName;
+        $url = rtrim($url, '/') . '/action/' . self::$action . '?send=' . $fileName;
 
-
-        $client = Typecho_Http_Client::get('Socket', 'Curl');
-        if (false == $client) {
-            self::saveLog("'主机不支持 php-curl 扩展而且没有打开 allow_url_fopen 功能, 无法正常使用此功能'\n");
-            return false;
-        }
-
-//        $client->send($url);
+        $date = new Typecho_Date(Typecho_Date::gmtTime());
+        $time = $date->format('Y-m-d H:i:s');
         
-        self::saveLog("开始发送请求：{$url}\n");
+        self::saveLog("{$time} 开始发送请求：{$url}\n");
         self::asyncRequest($url);
     }
+
+
 
     /**
      * 发送异步请求
      * @param $url
-     * @return bool
      */
     public static function asyncRequest($url)
+    {
+        self::isAvailable();
+        self::$_adapter == 'Socket' ? self::socket($url) : self::curl($url);
+    }
+
+    /**
+     * Socket 请求
+     * @param $url
+     * @return bool
+     */
+    public static function socket($url)
     {
         $params = parse_url($url);
         $path = $params['path'] . '?' . $params['query'];
         $host = $params['host'];
         $port = 80;
-        $http = '';
+        $scheme = '';
 
         if ('https' == $params['scheme']) {
             $port = 443;
-            $http = 'ssl://';
+            $scheme = 'ssl://';
         }
 
-        $fp = @fsockopen($http . $host, $port, $errno, $errstr, 30);
+        if (function_exists('fsockopen')) {
+            $fp = @fsockopen ($scheme . $host, $port, $errno, $errstr, 30);
+        } elseif (function_exists('pfsockopen')) {
+            $fp = @pfsockopen ($scheme . $host, $port, $errno, $errstr, 30);
+        } else {
+            $fp = stream_socket_client($scheme . $host . ":$port", $errno, $errstr, 30);
+        }
 
         if ($fp === false) {
             self::saveLog("SOCKET错误," . $errno . ':' . $errstr);
@@ -216,13 +248,72 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
         $out .= "Host: $host\r\n";
         $out .= "Connection: Close\r\n\r\n";
 
-        self::saveLog(var_export($params, true)."\n");
-        self::saveLog($out."\n");
+        self::saveLog("Socket 方式发送\r\n");
 
         fwrite($fp, $out);
         sleep(1);
         fclose($fp);
-        self::saveLog("请求结束\n");
+        self::saveLog("请求结束\r\n");
+    }
+
+    /**
+     * Curl 请求
+     * @param $url
+     */
+    public static function curl($url)
+    {
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_HTTPGET, 1);
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);  // 将curl_exec()获取的信息以文件流的形式返回,不直接输出。  
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 1);  // 连接等待时间  
+        curl_setopt($ch, CURLOPT_TIMEOUT, 1);         // curl允许执行时间
+        
+        self::saveLog("Curl 方式发送\r\n");
+        
+        curl_exec($ch);
+        curl_close($ch);
+        self::saveLog("请求结束\r\n");
+    }
+
+    /**
+     * 检测 适配器
+     * @return string
+     */
+    public static function isAvailable()
+    {
+        function_exists('ini_get') && ini_get('allow_url_fopen') && (self::$_adapter = 'Socket');
+        false == self::$_adapter && function_exists('curl_version') && (self::$_adapter = 'Curl');
+        
+        return self::$_adapter;
+    }
+
+    /**
+     * 检测 是否可写
+     * @param $file
+     * @return bool
+     */
+    public static function isWritable($file)
+    {
+        if (is_dir($file)) {
+            $dir = $file;
+            if ($fp = @fopen("$dir/check_writable", 'w')) {
+                @fclose($fp);
+                @unlink("$dir/check_writable");
+                $writeable = true;
+            } else {
+                $writeable = false;
+            }
+        } else {
+            if ($fp = @fopen($file, 'a+')) {
+                @fclose($fp);
+                $writeable = true;
+            } else {
+                $writeable = false;
+            }
+        }
+
+        return $writeable;
     }
 
     /**
