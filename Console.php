@@ -100,10 +100,9 @@ class CommentToMail_Console extends Typecho_Widget
      */
     public function testMailForm()
     {
-        $security = Typecho_Widget::widget('Widget_Security');
-
         /** 构建表单 */
-        $form = new Typecho_Widget_Helper_Form($security->getIndex('/action/' . CommentToMail_Plugin::$action),
+        $options = Typecho_Widget::widget('Widget_Options');
+        $form = new Typecho_Widget_Helper_Form(Typecho_Common::url('/action/' . CommentToMail_Plugin::$action, $options->index),
             Typecho_Widget_Helper_Form::POST_METHOD);
 
         /** 收件人名称 */
