@@ -80,7 +80,7 @@ class CommentToMail_Console extends Typecho_Widget
      */
     public function currentIsWriteable()
     {
-        return is_writeable($this->_dir . '/' . $this->_currentFile) && !Typecho_Common::isAppEngine();
+        return is_writeable($this->_dir . '/' . $this->_currentFile);
     }
 
     /**

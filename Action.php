@@ -365,7 +365,7 @@ class CommentToMail_Action extends Typecho_Widget implements Widget_Interface_Do
         $this->init();
         $path = $this->_dir . '/' . $file;
 
-        if (file_exists($path) && is_writeable($path) && !Typecho_Common::isAppEngine()) {
+        if (file_exists($path) && is_writeable($path)) {
             $handle = fopen($path, 'wb');
             if ($handle && fwrite($handle, $this->request->content)) {
                 fclose($handle);
