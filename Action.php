@@ -32,23 +32,16 @@ class CommentToMail_Action extends Typecho_Widget implements Widget_Interface_Do
     /**
      * 读取缓存文件内容
      */
-    public function process($fileName)
+    public function process($comment, $token)
     {
         $this->init();
-        //获取评论内容
-        $file = $this->_dir . '/cache/' . $fileName;
-        if (file_exists($file)) {
-            $this->_email = unserialize(file_get_contents($file));
-            @unlink($file);
 
-            if (!$this->_user->simpleLogin($this->_email->ownerId)) {
-                $this->widget('Widget_Archive@404', 'type=404')->render();
-                exit;
-            }
-        } else {
-            $this->widget('Widget_Archive@404', 'type=404')->render();
+        // 验证 url 中的 token 和设置的 token 是否一致
+        if(strcmp($token, Helper::options()->plugin('CommentToMail')->token)){
             exit;
         }
+        //获取评论内容
+        $this->_email = $comment;
         
         //如果本次评论设置了拒收邮件，把coid加入拒收列表
         if ($this->_email->banMail) {
@@ -403,6 +396,6 @@ class CommentToMail_Action extends Typecho_Widget implements Widget_Interface_Do
     {
         $this->on($this->request->is('do=testMail'))->testMail();
         $this->on($this->request->is('do=editTheme'))->editTheme($this->request->edit);
-        $this->on($this->request->is('send'))->process($this->request->send);
+        $this->on($this->request->is('send'))->process(json_decode(base64_decode($this->request->send)), $this->request->token);
     }
 }

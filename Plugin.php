@@ -37,10 +37,6 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
         if (false == self::isAvailable()) {
             throw new Typecho_Plugin_Exception(_t('对不起, 您的主机没有打开 allow_url_fopen 功能而且不支持 php-curl 扩展, 无法正常使用此功能'));
         }
-        
-        if (false == self::isWritable(dirname(__FILE__) . '/cache/')) {
-            throw new Typecho_Plugin_Exception(_t('对不起，插件目录不可写，无法正常使用此功能'));
-        }
 
         Typecho_Plugin::factory('Widget_Feedback')->finishComment = array('CommentToMail_Plugin', 'parseComment');
         Typecho_Plugin::factory('Widget_Comments_Edit')->finishComment = array('CommentToMail_Plugin', 'parseComment');
@@ -103,6 +99,10 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
                     'ssl'=>'ssl加密'),
                 array('validate'),'SMTP验证');
         $form->addInput($validate);
+
+        $token = new Typecho_Widget_Helper_Form_Element_Password('token', NULL, Typecho_Common::randString(7),
+                _t('Token'),_t('请勿泄露'));
+        $form->addInput($token);
         
         $fromName = new Typecho_Widget_Helper_Form_Element_Text('fromName', NULL, NULL,
                 _t('发件人名称'),_t('发件人名称，留空则使用博客标题'));
@@ -128,7 +128,7 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
                     'to_guest' => '评论被回复时，发邮件通知评论者。',
                     'to_me'=>'自己回复自己的评论时，发邮件通知。(同时针对博主和访客)',
                     'to_log' => '记录邮件发送日志。'),
-                array('to_owner','to_guest'), '其他设置',_t('选中该选项插件会在log/mailer_log.txt 文件中记录发送日志。'));
+                array('to_owner','to_guest'), '其他设置',_t('选中该选项插件会在log/mailer_log.txt 文件中记录发送日志，需要本地可以写入文件。'));
         $form->addInput($other->multiMode());
 
         $titleForOwner = new Typecho_Widget_Helper_Form_Element_Text('titleForOwner',null,"[{title}] 一文有新的评论",
@@ -188,11 +188,9 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
             $cfg['banMail'] = 0;
         }
 
-        $fileName = Typecho_Common::randString(7);
         $cfg      = (object)$cfg;
-        file_put_contents(dirname(__FILE__) . '/cache/' . $fileName, serialize($cfg));
         $url = ($options->rewrite) ? $options->siteUrl : $options->siteUrl . 'index.php';
-        $url = rtrim($url, '/') . '/action/' . self::$action . '?send=' . $fileName;
+        $url = rtrim($url, '/') . '/action/' . self::$action . '?send=' . base64_encode(json_encode($cfg)) . '&token='. Helper::options()->plugin('CommentToMail')->token;
 
         $date = new Typecho_Date(Typecho_Date::gmtTime());
         $time = $date->format('Y-m-d H:i:s');
@@ -286,34 +284,6 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
         false == self::$_adapter && function_exists('curl_version') && (self::$_adapter = 'Curl');
         
         return self::$_adapter;
-    }
-
-    /**
-     * 检测 是否可写
-     * @param $file
-     * @return bool
-     */
-    public static function isWritable($file)
-    {
-        if (is_dir($file)) {
-            $dir = $file;
-            if ($fp = @fopen("$dir/check_writable", 'w')) {
-                @fclose($fp);
-                @unlink("$dir/check_writable");
-                $writeable = true;
-            } else {
-                $writeable = false;
-            }
-        } else {
-            if ($fp = @fopen($file, 'a+')) {
-                @fclose($fp);
-                $writeable = true;
-            } else {
-                $writeable = false;
-            }
-        }
-
-        return $writeable;
     }
 
     /**
