@@ -34,6 +34,7 @@ class CommentToMail_Action extends Typecho_Widget implements Widget_Interface_Do
      */
     public function process($fileName)
     {
+        ignore_user_abort(TRUE);
         $this->init();
         //获取评论内容
         $file = $this->_dir . '/cache/' . $fileName;

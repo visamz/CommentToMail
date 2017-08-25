@@ -4,7 +4,7 @@
  *
  * @package CommentToMail
  * @author Byends Upd.
- * @version 2.0.0
+ * @version 2.0.1
  * @link http://www.byends.com
  * @oriAuthor DEFE (http://defe.me)
  * 
@@ -176,7 +176,7 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
             'permalink' => $comment->permalink,
             'status'    => $comment->status,
             'parent'    => $comment->parent,
-            'manage'    => $options->siteUrl . "admin/manage-comments.php"
+            'manage'    => $options->siteUrl . 'admin/manage-comments.php'
         );
 
         self::$_isMailLog = in_array('to_log', Helper::options()->plugin('CommentToMail')->other) ? true : false;
@@ -244,6 +244,8 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
             return false;
         }
 
+        stream_set_blocking($fp, 0);
+
         $out = "GET " . $path . " HTTP/1.1\r\n";
         $out .= "Host: $host\r\n";
         $out .= "Connection: Close\r\n\r\n";
@@ -251,7 +253,6 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
         self::saveLog("Socket 方式发送\r\n");
 
         fwrite($fp, $out);
-        sleep(1);
         fclose($fp);
         self::saveLog("请求结束\r\n");
     }
@@ -262,17 +263,16 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
      */
     public static function curl($url)
     {
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_HTTPGET, 1);
-        curl_setopt($ch, CURLOPT_URL, $url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);  // 将curl_exec()获取的信息以文件流的形式返回,不直接输出。  
-        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 1);  // 连接等待时间  
-        curl_setopt($ch, CURLOPT_TIMEOUT, 1);         // curl允许执行时间
+        $cmh = curl_multi_init();
+        $ch1 = curl_init();
+        curl_setopt($ch1, CURLOPT_URL, $url);
+        curl_multi_add_handle($cmh, $ch1);
+        curl_multi_exec($cmh, $active);
         
         self::saveLog("Curl 方式发送\r\n");
         
-        curl_exec($ch);
-        curl_close($ch);
+        curl_multi_remove_handle($cmh, $ch1);
+        curl_multi_close($cmh);
         self::saveLog("请求结束\r\n");
     }
 
