@@ -176,7 +176,7 @@ class CommentToMail_Plugin implements Typecho_Plugin_Interface
             'permalink' => $comment->permalink,
             'status'    => $comment->status,
             'parent'    => $comment->parent,
-            'manage'    => $options->siteUrl . 'admin/manage-comments.php'
+            'manage'    => $options->siteUrl ."..".__TYPECHO_ADMIN_DIR__."manage-comments.php"
         );
 
         self::$_isMailLog = in_array('to_log', Helper::options()->plugin('CommentToMail')->other) ? true : false;
